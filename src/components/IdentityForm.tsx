@@ -7,7 +7,7 @@ import { ptBR } from "date-fns/locale";
 import { CalendarIcon, Lock, ShieldCheck, ArrowLeft, CheckCircle2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { maskCPF, maskCEP, maskPhone, validateCPF, unmaskDigits, extractPhoneWithoutDDD, maskPartial } from "@/lib/masks";
+import { maskCPF, maskPhone, validateCPF, unmaskDigits, extractPhoneWithoutDDD, maskPartial } from "@/lib/masks";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,17 +17,33 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import {
     Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
 } from "@/components/ui/form";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 
-// Lista de domínios bloqueados (mantendo sua regra anterior)
+// Lista de domínios bloqueados
 const FORBIDDEN_DOMAINS = [
     "unesulbahia.edu.br",
     "faculdadezarns.com.br",
     "imepac.edu.br"
 ];
 
+// Mapeamento de Unidades com seus respectivos IDs (Valores)
+// Ajuste os IDs conforme sua regra de negócio (10, 20, 30...)
+const UNIDADES = [
+    { id: "10", label: "Zarns Salvador" },      // UNIFTC-SSA
+    { id: "20", label: "Zarns Itumbiara" },     // IMEPAC-ITUMB
+    { id: "30", label: "Zarns Pouso Alegre" },  // ZARNS-PA
+    { id: "40", label: "Unesul Bahia" },        // UNECE-EUN / MEDUNECE-EUN (Filtrado no Backend)
+    { id: "50", label: "IMEPAC Araguari" }      // IMEPAC -ARAGUARI
+] as const;
+
 const formSchema = z.object({
-    // NOVO: Validação de Nome Completo
     nomeCompleto: z.string()
         .trim()
         .min(3, "O nome deve ter no mínimo 3 caracteres")
@@ -35,12 +51,16 @@ const formSchema = z.object({
         .regex(/^[a-zA-ZÀ-ÿ\s]*$/, "O nome não deve conter números ou símbolos especiais"),
 
     matricula: z.string().trim().max(50, "Máximo 50 caracteres"),
+
+    // O valor aqui será a string do ID ("10", "20", etc)
+    unidade: z.string({ required_error: "Selecione a sua unidade de ensino" }),
+
     cpf: z.string().min(1, "CPF é obrigatório").refine(
         (val) => validateCPF(val),
         { message: "CPF inválido" }
     ),
     rg: z.string().trim().max(20, "Máximo 20 caracteres"),
-    cep: z.string().trim().max(10, "Máximo 10 caracteres"),
+
     dataNascimento: z.date({ required_error: "Data de nascimento é obrigatória" }),
     celular: z.string().min(1, "Número de celular é obrigatório").refine(
         (val) => unmaskDigits(val).length === 11,
@@ -61,11 +81,11 @@ const formSchema = z.object({
 type FormData = z.infer<typeof formSchema>;
 
 interface SubmittedData {
-    nomeCompleto: string; // Adicionado na interface
+    nomeCompleto: string;
     matricula: string;
+    unidadeId: string; // Armazena o ID ("10", "20")
     cpf: string;
     rg: string;
-    cep: string;
     dataNascimento: string;
     celular: string;
     email: string;
@@ -80,39 +100,38 @@ export default function IdentityForm() {
         resolver: zodResolver(formSchema),
         mode: "onBlur",
         defaultValues: {
-            nomeCompleto: "", // Valor inicial
+            nomeCompleto: "",
             matricula: "",
             cpf: "",
             rg: "",
-            cep: "",
             celular: "",
             email: "",
+            unidade: "",
         },
     });
 
     function onSubmit(data: FormData) {
         // Preparando o payload para a API
         const payload = {
-            nome_completo: data.nomeCompleto.toUpperCase(), // Enviando em caixa alta (opcional)
+            nome_completo: data.nomeCompleto.toUpperCase(),
             matricula: data.matricula,
+            // Enviando como Inteiro para o Backend Java
+            unidade_id: parseInt(data.unidade),
             cpf: unmaskDigits(data.cpf),
             rg: data.rg,
-            cep: unmaskDigits(data.cep),
             data_nascimento: format(data.dataNascimento, "yyyy-MM-dd"),
             celular: extractPhoneWithoutDDD(data.celular),
             email: data.email,
         };
 
-        // TODO: Enviar para API aqui
         console.log("Payload JSON para API:", JSON.stringify(payload, null, 2));
 
-        // Atualiza estado para mostrar a tela de sucesso
         setSubmittedData({
             nomeCompleto: data.nomeCompleto,
             matricula: data.matricula,
+            unidadeId: data.unidade, // Guarda o ID para buscar o label depois
             cpf: data.cpf,
             rg: data.rg,
-            cep: data.cep,
             dataNascimento: format(data.dataNascimento, "dd/MM/yyyy"),
             celular: data.celular,
             email: data.email,
@@ -136,6 +155,11 @@ export default function IdentityForm() {
         form.reset();
     }
 
+    // Helper para pegar o nome da unidade baseado no ID salvo
+    function getUnidadeLabel(id: string) {
+        return UNIDADES.find(u => u.id === id)?.label || id;
+    }
+
     if (submitted && submittedData) {
         return (
             <div className="min-h-screen bg-gradient-to-br from-[hsl(225,70%,45%)] via-[hsl(248,60%,50%)] to-[hsl(270,55%,45%)] flex flex-col">
@@ -157,10 +181,15 @@ export default function IdentityForm() {
                             </p>
 
                             <div className="text-left space-y-2 bg-muted/50 rounded-lg p-4 text-sm">
-                                {/* Exibição do Nome no Resumo */}
                                 <div className="flex justify-between border-b pb-2 mb-2">
                                     <span className="text-muted-foreground">Nome</span>
                                     <span className="font-medium text-right">{submittedData.nomeCompleto}</span>
+                                </div>
+
+                                <div className="flex justify-between">
+                                    <span className="text-muted-foreground">Unidade</span>
+                                    {/* Mostra o Nome (Label) e não o ID (10, 20...) */}
+                                    <span className="font-medium">{getUnidadeLabel(submittedData.unidadeId)}</span>
                                 </div>
 
                                 {submittedData.matricula && (
@@ -221,13 +250,35 @@ export default function IdentityForm() {
                         <Form {...form}>
                             <form onSubmit={form.handleSubmit(onSubmit, onError)} className="space-y-5">
 
-                                {/* CAMPO NOVO: Nome Completo */}
+                                {/* Nome Completo */}
                                 <FormField control={form.control} name="nomeCompleto" render={({ field }) => (
                                     <FormItem>
                                         <FormLabel>Nome Completo <span className="text-destructive">*</span></FormLabel>
                                         <FormControl>
                                             <Input placeholder="Ex: João da Silva" {...field} />
                                         </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )} />
+
+                                {/* Campo Unidade com Select e IDs */}
+                                <FormField control={form.control} name="unidade" render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>Unidade de Ensino <span className="text-destructive">*</span></FormLabel>
+                                        <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                            <FormControl>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Selecione sua unidade" />
+                                                </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent>
+                                                {UNIDADES.map((uni) => (
+                                                    <SelectItem key={uni.id} value={uni.id}>
+                                                        {uni.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                         <FormMessage />
                                     </FormItem>
                                 )} />
@@ -264,21 +315,6 @@ export default function IdentityForm() {
                                         <FormLabel>RG</FormLabel>
                                         <FormControl>
                                             <Input placeholder="Número do RG" {...field} />
-                                        </FormControl>
-                                        <FormMessage />
-                                    </FormItem>
-                                )} />
-
-                                {/* CEP */}
-                                <FormField control={form.control} name="cep" render={({ field }) => (
-                                    <FormItem>
-                                        <FormLabel>CEP</FormLabel>
-                                        <FormControl>
-                                            <Input
-                                                placeholder="00000-000"
-                                                value={field.value}
-                                                onChange={(e) => field.onChange(maskCEP(e.target.value))}
-                                            />
                                         </FormControl>
                                         <FormMessage />
                                     </FormItem>
