@@ -12,11 +12,12 @@ export interface IdentityData {
 }
 
 export const validateIdentity = async (data: IdentityData) => {
-    // Aqui fazemos o mapeamento para o formato que o seu Java espera
+    // Aqui fazemos o mapeamento para o formato que o seu Java espera.
+    // "unidade" agora é o código da unidade (string), ex.: "UNIFTC-SSA".
     const payload = {
         nome_completo: data.nomeCompleto.toUpperCase(),
         matricula: data.matricula,
-        unidade_id: parseInt(data.unidade),
+        unidade: data.unidade,
         cpf: data.cpf.replace(/\D/g, ""), // Limpa máscara
         rg: data.rg,
         data_nascimento: data.dataNascimento.toISOString().split('T')[0],

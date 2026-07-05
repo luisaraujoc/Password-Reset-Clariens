@@ -46,6 +46,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/components/ui/use-toast";
 import { IdentityData, validateIdentity } from "@/services/api";
 
@@ -56,14 +57,32 @@ const FORBIDDEN_DOMAINS = [
   "imepac.edu.br",
 ];
 
-// Mapeamento de Unidades com seus respectivos IDs (Valores)
+// Valor especial da Unesul Bahia: como o ERP tem dois códigos para a mesma
+// unidade (medicina x demais cursos), o select usa este sentinela e a escolha
+// final (MEDUNECE-EUN x UNECE-EUN) é resolvida pelo radio de "curso de Medicina".
+const UNESUL_SENTINEL = "UNESUL_BAHIA";
+const UNESUL_MEDICINA = "MEDUNECE-EUN";
+const UNESUL_DEMAIS = "UNECE-EUN";
+
+// Mapeamento de Unidades: o valor enviado ao backend é o CÓDIGO da unidade no Lyceum.
 const UNIDADES = [
-  { id: "10", label: "Zarns Salvador" }, // UNIFTC-SSA
-  { id: "20", label: "Zarns Itumbiara" }, // IMEPAC-ITUMB
-  { id: "30", label: "Zarns Pouso Alegre" }, // ZARNS-PA
-  { id: "40", label: "Unesul Bahia" }, // UNECE-EUN / MEDUNECE-EUN
-  { id: "50", label: "IMEPAC Araguari" }, // IMEPAC -ARAGUARI
+  { value: "UNIFTC-SSA", label: "Zarns Salvador" },
+  { value: "IMEPAC-ITUMB", label: "Zarns Itumbiara" },
+  { value: "ZARNS-PA", label: "Zarns Pouso Alegre" },
+  { value: UNESUL_SENTINEL, label: "Unesul Bahia" },
+  { value: "IMEPAC -ARAGUARI", label: "IMEPAC Araguari" },
 ] as const;
+
+// Resolve o código final da unidade, aplicando a regra da Unesul (medicina x demais).
+function resolveUnidadeCodigo(
+  unidade: string,
+  cursoMedicina?: "sim" | "nao",
+): string {
+  if (unidade === UNESUL_SENTINEL) {
+    return cursoMedicina === "sim" ? UNESUL_MEDICINA : UNESUL_DEMAIS;
+  }
+  return unidade;
+}
 
 const formSchema = z.object({
   nomeCompleto: z
@@ -78,7 +97,11 @@ const formSchema = z.object({
 
   matricula: z.string().trim().max(50, "Máximo 50 caracteres"),
 
-  unidade: z.string({ required_error: "Selecione a sua unidade de ensino" }),
+  unidade: z
+    .string({ required_error: "Selecione a sua unidade de ensino" })
+    .min(1, "Selecione a sua unidade de ensino"),
+
+  cursoMedicina: z.enum(["sim", "nao"]).optional(),
 
   cpf: z
     .string()
@@ -110,20 +133,18 @@ const formSchema = z.object({
           "E-mails institucionais não são aceitos. Use um e-mail pessoal.",
       },
     ),
+}).superRefine((data, ctx) => {
+  // Se a unidade for a Unesul Bahia, o aluno precisa informar se é de Medicina.
+  if (data.unidade === UNESUL_SENTINEL && !data.cursoMedicina) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["cursoMedicina"],
+      message: "Selecione uma opção para continuar",
+    });
+  }
 });
 
 type FormData = z.infer<typeof formSchema>;
-
-interface SubmittedData {
-  nomeCompleto: string;
-  matricula: string;
-  unidadeId: string;
-  cpf: string;
-  rg: string;
-  dataNascimento: string;
-  celular: string;
-  email: string;
-}
 
 export default function IdentityForm() {
   const [isLoading, setIsLoading] = useState(false);
@@ -144,17 +165,26 @@ export default function IdentityForm() {
     },
   });
 
-  async function onSubmit(data: IdentityData) {
+  async function onSubmit(data: FormData) {
     setIsLoading(true);
     try {
-      await validateIdentity(data);
+      const payload: IdentityData = {
+        ...data,
+        // Converte o sentinela da Unesul no código real (medicina x demais),
+        // de forma transparente para o aluno.
+        unidade: resolveUnidadeCodigo(data.unidade, data.cursoMedicina),
+      };
+      await validateIdentity(payload);
       setIsConstruction(true);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Erro no envio:", error);
       toast({
         variant: "destructive",
         title: "Erro na Validação",
-        description: error.message || "Não foi possível validar os seus dados.",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Não foi possível validar os seus dados.",
       });
     } finally {
       setIsLoading(false);
@@ -242,8 +272,14 @@ export default function IdentityForm() {
                         <span className="text-destructive">*</span>
                       </FormLabel>
                       <Select
-                        onValueChange={field.onChange}
-                        defaultValue={field.value}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          // Ao sair da Unesul, zera a escolha de medicina.
+                          if (value !== UNESUL_SENTINEL) {
+                            form.resetField("cursoMedicina");
+                          }
+                        }}
+                        value={field.value}
                       >
                         <FormControl>
                           <SelectTrigger>
@@ -252,7 +288,7 @@ export default function IdentityForm() {
                         </FormControl>
                         <SelectContent>
                           {UNIDADES.map((uni) => (
-                            <SelectItem key={uni.id} value={uni.id}>
+                            <SelectItem key={uni.value} value={uni.value}>
                               {uni.label}
                             </SelectItem>
                           ))}
@@ -262,6 +298,42 @@ export default function IdentityForm() {
                     </FormItem>
                   )}
                 />
+
+                {form.watch("unidade") === UNESUL_SENTINEL && (
+                  <FormField
+                    control={form.control}
+                    name="cursoMedicina"
+                    render={({ field }) => (
+                      <FormItem className="space-y-3 rounded-lg border border-border bg-muted/30 p-4">
+                        <FormLabel>
+                          Você é estudante do curso de Medicina?{" "}
+                          <span className="text-destructive">*</span>
+                        </FormLabel>
+                        <FormControl>
+                          <RadioGroup
+                            onValueChange={field.onChange}
+                            value={field.value}
+                            className="flex gap-6"
+                          >
+                            <FormItem className="flex items-center space-x-2 space-y-0">
+                              <FormControl>
+                                <RadioGroupItem value="sim" />
+                              </FormControl>
+                              <FormLabel className="font-normal">Sim</FormLabel>
+                            </FormItem>
+                            <FormItem className="flex items-center space-x-2 space-y-0">
+                              <FormControl>
+                                <RadioGroupItem value="nao" />
+                              </FormControl>
+                              <FormLabel className="font-normal">Não</FormLabel>
+                            </FormItem>
+                          </RadioGroup>
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
 
                 <FormField
                   control={form.control}
@@ -408,10 +480,25 @@ export default function IdentityForm() {
 
                 <div className="flex gap-3 rounded-lg border border-border bg-muted/40 p-4 text-xs text-muted-foreground">
                   <Lock className="w-5 h-5 shrink-0 mt-0.5 text-primary" />
-                  <p>
-                    Seus dados serão usados apenas para{" "}
-                    <strong>validação de identidade</strong>.
-                  </p>
+                  <div className="space-y-1.5">
+                    <p className="font-semibold text-foreground">
+                      Privacidade dos seus dados (LGPD)
+                    </p>
+                    <p>
+                      As informações deste formulário são utilizadas{" "}
+                      <strong>exclusivamente</strong> para confirmar sua
+                      identidade durante este atendimento.{" "}
+                      <strong>Nenhum dado é armazenado</strong> em nossos
+                      sistemas para uso posterior: eles são processados apenas no
+                      momento da validação e{" "}
+                      <strong>descartados em seguida</strong>.
+                    </p>
+                    <p>
+                      Não compartilhamos suas informações com terceiros nem as
+                      utilizamos para qualquer outra finalidade, em conformidade
+                      com a Lei Geral de Proteção de Dados (LGPD).
+                    </p>
+                  </div>
                 </div>
 
                 <Button
